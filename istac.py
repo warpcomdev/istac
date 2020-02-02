@@ -32,23 +32,24 @@ def parse(body: Mapping[str, Any]) -> Generator[Mapping[str, Any], None, None]:
         "attribute": [array of attributes ]
     }
 
-    yields a sequence of objects in the form:
-    {
-        "_offset": offset,
-        "_meta": attribute,
-        "F": observation,
-        "DIM1": "VAL1",
-        ... one per dimension
-    }
+    And is yielded in the form:
+    [
+        {
+            "_offset": offset,
+            "_meta": attribute,
+            "F": observation,
+            "DIM1": "VAL1", ... one per dimension
+        }, ... one per observation
+    ]
     """
     dim_names = body['format']
     observation = body['observation']
     attribute = body['attribute']
     dimension = tuple(body['dimension'][name]['representation']
                       for name in dim_names)
-    represent = tuple(tuple(reverse(dim['index'])) for dim in dimension)
+    represent = tuple(tuple(_reverse(dim['index'])) for dim in dimension)
     offset = 0
-    for position in count(dim['size'] for dim in dimension):
+    for position in _count(dim['size'] for dim in dimension):
         current = {
             '_offset': offset,
             '_meta': attribute[offset],
@@ -60,7 +61,7 @@ def parse(body: Mapping[str, Any]) -> Generator[Mapping[str, Any], None, None]:
         yield current
 
 
-def reverse(indexes: Mapping[str, int]) -> Sequence[str]:
+def _reverse(indexes: Mapping[str, int]) -> Sequence[str]:
     """Reverses an index of strings to offsets
 
     I.e. given a Mapping such as:
@@ -76,7 +77,7 @@ def reverse(indexes: Mapping[str, int]) -> Sequence[str]:
     return sorts
 
 
-def count(sizes: Iterable[int]) -> Generator[Iterable[int], None, None]:
+def _count(sizes: Iterable[int]) -> Generator[Iterable[int], None, None]:
     """
     Count is a generator that holds a set of indexes that
     rotate withing a given set of sizes.
@@ -120,12 +121,12 @@ class CountTest(unittest.TestCase):
     """Unittesting count"""
     def test_empty(self):
         """Empty sizes should result in no iteration"""
-        for _ in count([2, 5, 0]):
+        for _ in _count([2, 5, 0]):
             self.fail('Should not iterate when some size is 0')
 
     def test_regular(self):
         """Regular iteration should work"""
-        result = tuple(tuple(x) for x in count([2, 3, 2]))
+        result = tuple(tuple(x) for x in _count([2, 3, 2]))
         expect = (
             (0, 0, 0),
             (0, 0, 1),
@@ -147,7 +148,7 @@ class ReverseTest(unittest.TestCase):
     """Unittesting reverse"""
     def test_regular(self):
         """Regular input should be reversed"""
-        result = reverse({
+        result = _reverse({
             'val3': 3,
             'val0': 0,
             'val1': 1,

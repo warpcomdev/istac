@@ -35,7 +35,10 @@ async def fetch(session: aiohttp.ClientSession, url: str) -> Mapping[str, Any]:
 
 
 async def indicator_data(code: str) -> pd.DataFrame:
-    """Build dataframe from ISTAC API data"""
+    """
+    Build dataframe from ISTAC API data.
+    See https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
+    """
     url = f'https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0/indicators/{code}/data'
     async with aiohttp.ClientSession() as session:
         indicator = pd.DataFrame(istac.parse(await fetch(session, url)))

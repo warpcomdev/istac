@@ -1,4 +1,5 @@
 *.pyc
 *.pyo
 .mypy_cache
+.vscode
 
