@@ -4,11 +4,64 @@ ISTAC module holds some helpers to decode ISTAC API data
 """
 
 import unittest
+from typing import Iterable, Generator, Mapping, Sequence, Optional, Any
 
-from typing import Iterable, Generator, Mapping, Sequence, Any
+import itertools
+import aiohttp
+import pandas as pd
 
 
-def parse(body: Mapping[str, Any]) -> Generator[Mapping[str, Any], None, None]:
+class FetchError(Exception):
+    """Exception raised when Fetch fails"""
+
+    # pylint: disable=super-init-not-called
+    def __init__(self, url: str, headers: Mapping[str, str],
+                 resp: aiohttp.ClientResponse):
+        """Build error info from Fetch request"""
+        self.url = url
+        self.status = resp.status
+        self.headers = headers
+
+    def __str__(self) -> str:
+        """Format exception"""
+        return f'URL[{self.url}]: {self.status}'
+
+
+async def indicator_data(
+        session: aiohttp.ClientSession,
+        code: str,
+        params: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
+    """
+    Build dataframe from ISTAC API data. See:
+    https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
+
+    For example: request monthly data for 2019, absolute figures
+    for indicator 'TURISTAS':
+
+    data = await indicator_data(
+        session, 'TURISTAS', {
+            'granularity': 'TIME[MONTHLY]',
+            'representation': 'MEASURE[ABSOLUTE],TIME[2019]',
+            'fields': '-observationsMetadata',
+        })
+    """
+    url = f'https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0/indicators/{code}/data'
+    return _parse_data(await _fetch(session, url, params))
+
+
+async def _fetch(
+        session: aiohttp.ClientSession,
+        url: str,
+        params: Optional[Mapping[str, str]] = None) -> Mapping[str, Any]:
+    """Fetch json body from URL"""
+    headers = {'Accept': 'application/json'}
+    async with session.get(url, headers=headers, params=params) as response:
+        if response.status != 200:
+            raise FetchError(url, headers, response)
+        return await response.json()
+
+
+def _parse_data(body: Mapping[str, Any]) -> pd.DataFrame:
     """
     Turns the data from ISTAC API into a sequence of objects.
 
@@ -29,36 +82,56 @@ def parse(body: Mapping[str, Any]) -> Generator[Mapping[str, Any], None, None]:
             }, // as many DIMs as needed
         },
         "observation": [ array of observations ],
-        "attribute": [array of attributes ]
+        "attribute": [array of attributes, optional ]
     }
 
-    And is yielded in the form:
-    [
-        {
-            "_offset": offset,
-            "_meta": attribute,
-            "F": observation,
-            "DIM1": "VAL1", ... one per dimension
-        }, ... one per observation
-    ]
+    From swagger documentation:
+        > observation (Array[string], optional): Array de observaciones. Las
+        > observaciones se encuentran ordenadas por la combinación de las
+        > categorías manteniendo fijada siempre la primera categoría de la
+        > primera dimensión e iterando sobre las categorías de la última
+        > dimensión del array. Por ejemplo, dadas las dimensiones A, B y C
+        > con 3, 2, y 4 categorías respectivamente, los valores estarán
+        > ordenados de tal manera que primero se itere sobre las 4 categorías
+        > de C, posteriormente sobre las dos de B y por último sobre las 3 de
+        > A. En dicho ejemplo, el resultado sería el siguiente:
+        > A1B1C1, A1B1C2, A1B1C3, A1B1C4, A1B2C1, A1B2C2, A1B2C3, A1B2C4,
+        > A2B1C1, A2B1C2, A2B1C3, A1B1C4, A2B2C1, A2B2C2, A2B2C3, A2B2C4,
+        > A3B1C1, A3B1C2, A3B1C3, A3B1C4, A3B2C1, A3B2C2, A3B2C3, A3B2C4
+
+    This data is inserted in a DataFrame with columns
+    [ '_meta', '_attr', 'F' ], and then one column per dim.
     """
-    dim_names = body['format']
-    observation = body['observation']
-    attribute = body['attribute']
-    dimension = tuple(body['dimension'][name]['representation']
-                      for name in dim_names)
-    represent = tuple(tuple(_reverse(dim['index'])) for dim in dimension)
-    offset = 0
-    for position in _count(dim['size'] for dim in dimension):
-        current = {
-            '_offset': offset,
-            '_meta': attribute[offset],
-            'F': observation[offset],
-        }
-        current.update((dim_names[idx], represent[idx][pos])
-                       for idx, pos in enumerate(position))
-        offset += 1
-        yield current
+    dnames = tuple(body['format'])
+
+    def values():
+        # Build inverse index from representations
+        repres = tuple(body['dimension'][name]['representation']
+                       for name in dnames)
+        revidx = tuple(tuple(_reverse(rep['index'])) for rep in repres)
+        # Build dimension counter from sizes
+        dsizes = (rep['size'] for rep in repres)
+        dcount = _count(dsizes)
+        # Get observations and attributes
+        observ = body['observation']
+        attrib = body.get('attribute', itertools.repeat(None))
+        offset = 0
+        for count, obs, attr in zip(dcount, observ, attrib):
+            current = {
+                '_offset': offset,
+                '_meta': attr,
+                'F': obs,
+            }
+            current.update((dnames[idx], revidx[idx][pos])
+                           for idx, pos in enumerate(count))
+            offset += 1
+            yield current
+
+    # Make sure the dataframe has the proper format, even
+    # when data is empty.
+    columns = ['_offset', '_meta', 'F']
+    columns.extend(dnames)
+    return pd.DataFrame(values(), columns=columns).set_index('_offset')
 
 
 def _reverse(indexes: Mapping[str, int]) -> Sequence[str]:
@@ -154,14 +227,47 @@ class ReverseTest(unittest.TestCase):
             'val1': 1,
             'val2': 2,
         })
-        self.assertEqual(result, ('val0', 'val1', 'val2', 'val3'))
+        self.assertEqual(tuple(result), ('val0', 'val1', 'val2', 'val3'))
 
 
-class ParseTest(unittest.TestCase):
+class ParseDataTest(unittest.TestCase):
     """Unittesting parse"""
+
+    # pylint: disable=no-self-use
+    def test_empty(self):
+        """Empty DataFrame should have proper columns"""
+        actual = _parse_data({
+            'format': ['DIM1', 'DIM2', 'DIM3'],
+            'dimension': {
+                'DIM1': {
+                    'representation': {
+                        'size': 0,
+                        'index': {}
+                    }
+                },
+                'DIM2': {
+                    'representation': {
+                        'size': 0,
+                        'index': {}
+                    }
+                },
+                'DIM3': {
+                    'representation': {
+                        'size': 0,
+                        'index': {}
+                    }
+                },
+            },
+            'observation': [],
+        })
+        columns = ['_offset', '_meta', 'F', 'DIM1', 'DIM2', 'DIM3']
+        expected = pd.DataFrame(tuple(), columns=columns).set_index('_offset')
+        pd.testing.assert_frame_equal(actual, expected)
+
+    # pylint: disable=no-self-use
     def test_regular(self):
         """Regular input should be packaged"""
-        data = {
+        actual = _parse_data({
             'format': ['DIM1', 'DIM2', 'DIM3'],
             'dimension': {
                 'DIM1': {
@@ -221,8 +327,9 @@ class ParseTest(unittest.TestCase):
                 'ATT_D1V2_D2V3_D3V1',
                 'ATT_D1V2_D2V3_D3V2',
             ],
-        }
-        expected = (
+        })
+        columns = ['_offset', '_meta', 'F', 'DIM1', 'DIM2', 'DIM3']
+        expected = pd.DataFrame((
             {
                 'DIM1': 'D1V1',
                 'DIM2': 'D2V1',
@@ -319,8 +426,9 @@ class ParseTest(unittest.TestCase):
                 'F': 'D1V2_D2V3_D3V2',
                 '_meta': 'ATT_D1V2_D2V3_D3V2'
             },
-        )
-        self.assertEqual(tuple(parse(data)), expected)
+        ),
+                                columns=columns).set_index('_offset')
+        pd.testing.assert_frame_equal(actual, expected)
 
 
 if __name__ == "__main__":
