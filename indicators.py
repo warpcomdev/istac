@@ -9,6 +9,8 @@ import istac
 async def main():
     """Sample main function"""
     async with aiohttp.ClientSession() as session:
+        async for indicator in istac.indicators(session):
+            print(indicator)
         data = await istac.indicator_data(
             session, 'TURISTAS', {
                 'granularity': 'TIME[MONTHLY]',

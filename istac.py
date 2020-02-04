@@ -1,10 +1,13 @@
 #!/usr/bin/env python
+# pylint fights with yapf over line breaks
+# pylint: disable=bad-continuation
 """
 ISTAC module holds some helpers to decode ISTAC API data
 """
 
 import unittest
-from typing import Iterable, Generator, Mapping, Sequence, Optional, Any
+from typing import (cast, Iterable, Generator, AsyncGenerator, Mapping, Tuple,
+                    Sequence, Optional, Any)
 
 import itertools
 import aiohttp
@@ -25,6 +28,95 @@ class FetchError(Exception):
     def __str__(self) -> str:
         """Format exception"""
         return f'URL[{self.url}]: {self.status}'
+
+
+# pylint: disable=invalid-name,too-many-instance-attributes
+class Indicator:
+    """
+    Indicator class collects information published by ISTAC API
+    for a particular indicator
+    """
+    @staticmethod
+    def _asDict(item: Mapping[str, Any], attrib: str) -> Mapping[str, str]:
+        """Enumerate and generate dict"""
+        return cast(Mapping[str, str], item.get(attrib, dict()))
+
+    @staticmethod
+    def _asStr(item: Mapping[str, Any], attrib: str) -> str:
+        """Turn into string"""
+        return str(item[attrib])
+
+    @staticmethod
+    def _asDictTuple(item: Mapping[str, Any],
+                     attrib: str) -> Tuple[Mapping[str, str], ...]:
+        return tuple(
+            cast(Sequence[Mapping[str, str]], item.get(attrib, tuple())))
+
+    def __init__(self, istac_data: Mapping[str, Any]):
+        """Build indicator from istac data item"""
+        # Set one by one so mypy gets the type right
+        self.id = Indicator._asStr(istac_data, 'id')
+        self.kind = Indicator._asStr(istac_data, 'kind')
+        self.selfLink = Indicator._asStr(istac_data, 'selfLink')
+        self.code = Indicator._asStr(istac_data, 'code')
+        self.version = Indicator._asStr(istac_data, 'version')
+        self.title = Indicator._asDict(istac_data, 'title')
+        self.systemSurveyLinks = Indicator._asDictTuple(
+            istac_data, 'systemSurveyLinks')
+        self.subjectCode = Indicator._asStr(istac_data, 'subjectCode')
+        self.subjectTitle = Indicator._asDict(istac_data, 'subjectTitle')
+        self.conceptDescription = Indicator._asDict(istac_data,
+                                                    'conceptDescription')
+        self.notes = Indicator._asDict(istac_data, 'notes')
+
+    def __str__(self) -> str:
+        """Returns attribute title"""
+        title = self.title.get('__default__', '[no title]')
+        return f'{self.code}: {title}'
+
+    @staticmethod
+    def fields() -> Sequence[str]:
+        """Returns sequence of field names.
+        This can be useful if you want to build a pd.DataFrame
+        from a sequence of indicators.
+        First field can be used as indes of dataframe.
+        """
+        return ('id', 'kind', 'selfLink', 'code', 'version', 'title',
+                'systemSurveyLinks', 'subjectCode', 'subjectTitle',
+                'conceptDescription', 'notes')
+
+    def __repr__(self) -> str:
+        """Return detailed representation"""
+        data = repr(
+            dict((key, getattr(self, key)) for key in Indicator.fields()))
+        return f'Indicator({data})'
+
+    async def data(self,
+                   session: aiohttp.ClientSession,
+                   params: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
+        """Collects indicator data"""
+        return await indicator_data(session, self.code, params)
+
+
+async def indicators(
+    session: aiohttp.ClientSession,
+    params: Optional[Mapping[str, str]] = None
+) -> AsyncGenerator[Indicator, None]:
+    """
+    Enumerate indicators available from ISTAC API data. See:
+    https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
+    """
+    next_url = f'https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0/indicators'
+    while next_url != '':
+        data = await _fetch(session, next_url, params)
+        for item in data['items']:
+            yield Indicator(item)
+        next_url = data.get('nextLink', '')
+        self_url = data.get('selfLink', '')
+        if next_url == self_url:
+            next_url = ''
+        # Params for following pages are in the url
+        params = None
 
 
 async def indicator_data(
@@ -53,7 +145,7 @@ async def _fetch(
         session: aiohttp.ClientSession,
         url: str,
         params: Optional[Mapping[str, str]] = None) -> Mapping[str, Any]:
-    """Fetch json body from URL"""
+    """Fetch json body from URL. Raises FetchError on error"""
     headers = {'Accept': 'application/json'}
     async with session.get(url, headers=headers, params=params) as response:
         if response.status != 200:
