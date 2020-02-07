@@ -40,7 +40,7 @@ class MultiStr(dict):
     """Dictionary containing one str per language"""
     def __str__(self):
         """Return default representation"""
-        return self['__default__']
+        return self.get('__default__', '')
 
     def __repr__(self):
         """Return complete object"""
