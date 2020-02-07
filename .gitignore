@@ -1,6 +1,7 @@
 *.pyc
 *.pyo
 *.csv
+*.txt
 .mypy_cache
 .vscode
 
