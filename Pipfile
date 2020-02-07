@@ -7,12 +7,10 @@ verify_ssl = true
 pylint = "*"
 yapf = "*"
 mypy = "*"
+ipykernel = "*"
 
 [packages]
 aiohttp = "*"
 cchardet = "*"
 aiodns = "*"
 pandas = "*"
-
-[requires]
-python_version = "3.8"
