@@ -192,7 +192,7 @@ class Dimension:
             raise ValueError(f'Undefined dimension code {self.code}')
         columns: Dict[str, _Getter] = {
             'code': Path('code'),
-            'title': Path('title'),
+            'title': MultiStr.wrap(Path('title')),
         }
         if len(self.granularity) > 0:
             columns['granularityCode'] = Path('granularityCode')
