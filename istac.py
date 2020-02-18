@@ -30,12 +30,7 @@ class FetchError(Exception):
         return f'URL[{self.url}]: {self.status}'
 
 
-# Getter type is an alias for a callable that retrieves a
-# particular attribute from an object. The type of object and
-# attribute are dynamic.
-_Getter = Callable[[Any], Any]
-
-
+# pylint: disable=too-few-public-methods
 class MultiStr(dict):
     """Dictionary containing one str per language"""
     def __str__(self):
@@ -46,20 +41,29 @@ class MultiStr(dict):
         """Return complete object"""
         return f'MultiStr({repr(dict(self))})'
 
-    @staticmethod
-    def wrap(getter: _Getter) -> _Getter:
-        """Wraps a _Getter to modify return type"""
-        def _wrap(item):
-            original = getter(item)
-            return MultiStr(original) if original is not None else None
-        return _wrap
+
+# pylint: disable=too-few-public-methods
+class _Path:
+    """_Path is a collection of nested attributes in a json object"""
+    def __init__(self, cast_with: Callable[[Any], Any], *args: str):
+        """Collect all arguments as a path"""
+        self.cast = cast_with
+        self.path = args
+
+    def __call__(self, item: Any) -> Any:
+        """Gets an attribute nested inside a json object, at the given path"""
+        for step in self.path:
+            item = item.get(step, None)
+            if item is None:
+                break
+        return self.cast(item) if item is not None else None
 
 
 # pylint: disable=invalid-name,too-many-instance-attributes
 class Indicator:
     """
     Indicator class collects information published by ISTAC API
-    for a particular indicator
+    for a particular indicator.
     """
     @staticmethod
     def _asMulti(item: Mapping[str, Any], attrib: str) -> MultiStr:
@@ -128,90 +132,6 @@ class Indicator:
         return await dimension_data(session, self.code)
 
 
-# pylint: disable=too-few-public-methods
-class Path:
-    """Path is a collection of nested attributes in a json object"""
-    def __init__(self, *args: str):
-        """Collect all arguments as a path"""
-        self.path = args
-
-    def __call__(self, item: Any) -> Any:
-        """Gets an attribute nested inside a json object, at the given path"""
-        for step in self.path:
-            item = item.get(step, None)
-            if item is None:
-                break
-        return item
-
-
-class Dimension:
-    """Dimension class"""
-
-    COLUMNS: Mapping[str, Mapping[str, _Getter]] = {
-        'GEOGRAPHICAL': {
-            'latitude': Path('latitude'),
-            'longitude': Path('longitude'),
-        },
-        'TIME': dict(),
-        'MEASURE': {
-            'baseValue': Path('quantity', 'baseValue'),
-            'decimalPlaces': Path('quantity', 'decimalPlaces'),
-            'isPercentage': Path('quantity', 'isPercentage'),
-            'max': Path('quantity', 'max'),
-            'min': Path('quantity', 'min'),
-            'percentageOf': MultiStr.wrap(Path('quantity', 'percentageOf')),
-            'significantDigits': Path('quantity', 'significantDigits'),
-            'type': Path('quantity', 'type'),
-            'unit': MultiStr.wrap(Path('quantity', 'unit')),
-            'unitMultiplier': MultiStr.wrap(Path('quantity',
-                                                 'unitMultiplier')),
-            'unitSymbol': Path('quantity', 'unitSymbol'),
-            'unitSymbolPosition': Path('quantity', 'unitSymbolPosition'),
-        },
-    }
-
-    @staticmethod
-    def _nested(item: Any, path: Sequence[str]) -> Any:
-        """Gets an attribute nested inside a json object, at the given path"""
-        for step in path:
-            item = item.get(step, None)
-            if item is None:
-                break
-        return item
-
-    @staticmethod
-    def _granularity(
-            data: Sequence[Mapping[str, Any]]) -> Mapping[str, MultiStr]:
-        """Formats granularity as a mapping of codes to titles"""
-        return dict(
-            (str(item['code']), MultiStr(item['title'])) for item in data)
-
-    def _columns(self) -> Mapping[str, Callable[[Any], Any]]:
-        """List of columns to retrieve and path inside representation"""
-        if self.code not in Dimension.COLUMNS:
-            raise ValueError(f'Undefined dimension code {self.code}')
-        columns: Dict[str, _Getter] = {
-            'code': Path('code'),
-            'title': MultiStr.wrap(Path('title')),
-        }
-        if len(self.granularity) > 0:
-            columns['granularityCode'] = Path('granularityCode')
-        columns.update(Dimension.COLUMNS[self.code])
-        return columns
-
-    def __init__(self, body: Mapping[str, Any]):
-        """
-        Initialize from data received from ISTAC
-        """
-        self.code = str(body['code'])
-        self.granularity = Dimension._granularity(
-            body.get('granularity', tuple()))
-        columns = self._columns()
-        data = (dict((col, path(rep)) for col, path in columns.items())
-                for rep in body.get('representation', tuple()))
-        self.points = pd.DataFrame(data, columns=columns).set_index('code')
-
-
 async def indicators(
     session: aiohttp.ClientSession,
     params: Optional[Mapping[str, str]] = None
@@ -255,8 +175,64 @@ async def indicator_data(
     return _parse_data(await _fetch(session, url, params))
 
 
+class Dimension:
+    """Dimension class"""
+
+    _COLUMNS: Mapping[str, Mapping[str, _Path]] = {
+        'GEOGRAPHICAL': {
+            'latitude': _Path(float, 'latitude'),
+            'longitude': _Path(float, 'longitude'),
+        },
+        'TIME': dict(),
+        'MEASURE': {
+            'baseValue': _Path(str, 'quantity', 'baseValue'),
+            'decimalPlaces': _Path(int, 'quantity', 'decimalPlaces'),
+            'isPercentage': _Path(str, 'quantity', 'isPercentage'),
+            'max': _Path(float, 'quantity', 'max'),
+            'min': _Path(float, 'quantity', 'min'),
+            'percentageOf': _Path(MultiStr, 'quantity', 'percentageOf'),
+            'significantDigits': _Path(int, 'quantity', 'significantDigits'),
+            'type': _Path(str, 'quantity', 'type'),
+            'unit': _Path(MultiStr, 'quantity', 'unit'),
+            'unitMultiplier': _Path(MultiStr, 'quantity', 'unitMultiplier'),
+            'unitSymbol': _Path(str, 'quantity', 'unitSymbol'),
+            'unitSymbolPosition': _Path(str, 'quantity', 'unitSymbolPosition'),
+        },
+    }
+
+    @staticmethod
+    def _granularity(
+            data: Sequence[Mapping[str, Any]]) -> Mapping[str, MultiStr]:
+        """Formats granularity as a mapping of codes to titles"""
+        return dict(
+            (str(item['code']), MultiStr(item['title'])) for item in data)
+
+    def _columns(self) -> Mapping[str, Callable[[Any], Any]]:
+        """List of columns and corresponding paths within representation"""
+        if self.code not in Dimension._COLUMNS:
+            raise ValueError(f'Undefined dimension code {self.code}')
+        columns: Dict[str, _Path] = {
+            'code': _Path(str, 'code'),
+            'title': _Path(MultiStr, 'title'),
+        }
+        if self.granularity is not None and len(self.granularity) > 0:
+            columns['granularityCode'] = _Path(str, 'granularityCode')
+        columns.update(Dimension._COLUMNS[self.code])
+        return columns
+
+    def __init__(self, body: Mapping[str, Any]):
+        """Build dimension with body received from ISTAC"""
+        self.code = str(body['code'])
+        self.granularity = Dimension._granularity(
+            body.get('granularity', tuple()))
+        columns = self._columns()
+        data = (dict((col, path(rep)) for col, path in columns.items())
+                for rep in body.get('representation', tuple()))
+        self.df = pd.DataFrame(data, columns=columns).set_index('code')
+
+
 async def dimension_data(session: aiohttp.ClientSession,
-                         code: str) -> Mapping[str, pd.DataFrame]:
+                         code: str) -> Mapping[str, Dimension]:
     """
     Build dataframe from ISTAC API dimension data. See:
     https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
