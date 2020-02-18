@@ -9,19 +9,32 @@ import istac
 async def main():
     """Sample main function"""
     async with aiohttp.ClientSession() as session:
-        #async for indicator in istac.indicators(session):
-        #    print(indicator)
-        #data = await istac.indicator_data(
-        #    session, 'TURISTAS', {
-        #        'granularity': 'TIME[MONTHLY]',
-        #        'representation': 'MEASURE[ABSOLUTE]',
-        #        'fields': '-observationsMetadata',
-        #    })
-        #print(data.head(10))
-        dims = await istac.dimension_data(session, 'TURISTAS')
-        for code, dim in dims.items():
-            print(f'{code}:')
-            print(dim.points.head(10))
+
+        # Get indicators
+        async for indicator in istac.indicators(session):
+            print(f'Indicator {indicator.code} ({indicator.title})')
+
+        # Get indicator data
+        code = 'TURISTAS'
+        data = await istac.indicator_df(
+            session, code, {
+                'granularity': 'TIME[MONTHLY]',
+                'representation': 'MEASURE[ABSOLUTE]',
+                'fields': '-observationsMetadata',
+            })
+        print(f'Indicator {code}')
+        print(data.head(10))
+
+        # Get dimensions
+        dims = await istac.dimensions(session, code)
+        for dim_name, dim in dims.items():
+            print(f'Dimension {dim_name} (code {dim.code})')
+            print(dim.df.head(5))
+
+        # Join df with dimensions
+        join = istac.Indicator.join(data, dims, dropna=True)
+        print(f'Joined indicator {code} with its dims')
+        print(join.head(10))
 
 
 if __name__ == '__main__':
