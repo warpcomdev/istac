@@ -7,7 +7,7 @@ ISTAC module holds some helpers to decode ISTAC API data
 
 import unittest
 from typing import (cast, Iterable, Generator, AsyncGenerator, Mapping, Dict,
-                    Tuple, Sequence, Optional, Any, Callable)
+                    Sequence, Optional, Any, Callable)
 
 import itertools
 import aiohttp
@@ -59,77 +59,159 @@ class _Path:
         return self.cast(item) if item is not None else None
 
 
-# pylint: disable=invalid-name,too-many-instance-attributes
+# pylint: disable=too-few-public-methods
+class _Schema(dict):
+    """_Schema encapsulates a mapping from attribute names to _Path"""
+    def __init__(self, items: Optional[Mapping[str, _Path]] = None):
+        """Initialize schema from dict"""
+        if items is not None:
+            super().__init__(items)
+
+    def apply(self, item: Any) -> Dict[str, Any]:
+        """Apply this schema to an object, return dict"""
+        return dict((key, path(item)) for key, path in self.items())
+
+
+class Dimension:
+    """Dimension class"""
+
+    _SCHEMAS: Mapping[str, _Schema] = {
+        'GEOGRAPHICAL':
+        _Schema({
+            'latitude': _Path(float, 'latitude'),
+            'longitude': _Path(float, 'longitude'),
+        }),
+        'TIME':
+        _Schema(),
+        'MEASURE':
+        _Schema({
+            'baseValue':
+            _Path(str, 'quantity', 'baseValue'),
+            'decimalPlaces':
+            _Path(int, 'quantity', 'decimalPlaces'),
+            'isPercentage':
+            _Path(str, 'quantity', 'isPercentage'),
+            'max':
+            _Path(float, 'quantity', 'max'),
+            'min':
+            _Path(float, 'quantity', 'min'),
+            'percentageOf':
+            _Path(MultiStr, 'quantity', 'percentageOf'),
+            'significantDigits':
+            _Path(int, 'quantity', 'significantDigits'),
+            'type':
+            _Path(str, 'quantity', 'type'),
+            'unit':
+            _Path(MultiStr, 'quantity', 'unit'),
+            'unitMultiplier':
+            _Path(MultiStr, 'quantity', 'unitMultiplier'),
+            'unitSymbol':
+            _Path(str, 'quantity', 'unitSymbol'),
+            'unitSymbolPosition':
+            _Path(str, 'quantity', 'unitSymbolPosition'),
+        }),
+    }
+
+    @staticmethod
+    def _granularity(
+            data: Sequence[Mapping[str, Any]]) -> Mapping[str, MultiStr]:
+        """Formats granularity as a mapping of codes to titles"""
+        return dict(
+            (str(item['code']), MultiStr(item['title'])) for item in data)
+
+    def _schema(self) -> _Schema:
+        """List of columns and corresponding paths within representation"""
+        if self.code not in Dimension._SCHEMAS:
+            raise ValueError(f'Undefined dimension code {self.code}')
+        columns = _Schema({
+            'code': _Path(str, 'code'),
+            'title': _Path(MultiStr, 'title'),
+        })
+        if self.granularity is not None and len(self.granularity) > 0:
+            columns['granularityCode'] = _Path(str, 'granularityCode')
+        columns.update(Dimension._SCHEMAS[self.code])
+        return columns
+
+    # pylint: disable=invalid-name
+    def __init__(self, body: Mapping[str, Any]):
+        """Build dimension with body received from ISTAC"""
+        self.code = str(body['code'])
+        self.granularity = Dimension._granularity(
+            body.get('granularity', tuple()))
+        schema = self._schema()
+        data = (schema.apply(rep)
+                for rep in body.get('representation', tuple()))
+        self.df = pd.DataFrame(data, columns=schema.keys()).set_index('code')
+
+
 class Indicator:
     """
     Indicator class collects information published by ISTAC API
     for a particular indicator.
     """
-    @staticmethod
-    def _asMulti(item: Mapping[str, Any], attrib: str) -> MultiStr:
-        """Enumerate and generate dict"""
-        return MultiStr(item.get(attrib, dict()))
-
-    @staticmethod
-    def _asStr(item: Mapping[str, Any], attrib: str) -> str:
-        """Turn into string"""
-        return str(item[attrib])
-
-    @staticmethod
-    def _asDictTuple(item: Mapping[str, Any],
-                     attrib: str) -> Tuple[Mapping[str, str], ...]:
-        return tuple(
-            cast(Sequence[Mapping[str, str]], item.get(attrib, tuple())))
+    _SCHEMA = _Schema({
+        'id':
+        _Path(str, 'id'),
+        'kind':
+        _Path(str, 'kind'),
+        'selfLink':
+        _Path(str, 'selfLink'),
+        'code':
+        _Path(str, 'code'),
+        'version':
+        _Path(str, 'version'),
+        'title':
+        _Path(MultiStr, 'title'),
+        'systemSurveyLinks':
+        _Path(tuple, 'systemSurveyLinks'),
+        'subjectCode':
+        _Path(str, 'subjectCode'),
+        'subjectTitle':
+        _Path(MultiStr, 'subjectTitle'),
+        'conceptDescription':
+        _Path(MultiStr, 'conceptDescription'),
+        'notes':
+        _Path(MultiStr, 'notes'),
+    })
 
     def __init__(self, istac_data: Mapping[str, Any]):
         """Build indicator from istac data item"""
-        # Set one by one so mypy gets the type right
-        self.id = Indicator._asStr(istac_data, 'id')
-        self.kind = Indicator._asStr(istac_data, 'kind')
-        self.selfLink = Indicator._asStr(istac_data, 'selfLink')
-        self.code = Indicator._asStr(istac_data, 'code')
-        self.version = Indicator._asStr(istac_data, 'version')
-        self.title = Indicator._asMulti(istac_data, 'title')
-        self.systemSurveyLinks = Indicator._asDictTuple(
-            istac_data, 'systemSurveyLinks')
-        self.subjectCode = Indicator._asStr(istac_data, 'subjectCode')
-        self.subjectTitle = Indicator._asMulti(istac_data, 'subjectTitle')
-        self.conceptDescription = Indicator._asMulti(istac_data,
-                                                     'conceptDescription')
-        self.notes = Indicator._asMulti(istac_data, 'notes')
+        self.attribs = Indicator._SCHEMA.apply(istac_data)
+        self.code = cast(str, self.attribs['code'])
+        self.title = cast(MultiStr, self.attribs['title'])
 
     def __str__(self) -> str:
         """Returns attribute title"""
         return f'{self.code}: {self.title}'
 
-    @staticmethod
-    def fields() -> Sequence[str]:
-        """Returns sequence of field names.
-        This can be useful if you want to build a pd.DataFrame
-        from a sequence of indicators.
-        First field can be used as indes of dataframe.
-        """
-        return ('id', 'kind', 'selfLink', 'code', 'version', 'title',
-                'systemSurveyLinks', 'subjectCode', 'subjectTitle',
-                'conceptDescription', 'notes')
-
     def __repr__(self) -> str:
         """Return detailed representation"""
-        data = repr(
-            dict((key, getattr(self, key)) for key in Indicator.fields()))
-        return f'Indicator({data})'
+        return f'Indicator({repr(self.attribs)})'
 
-    async def data(self,
-                   session: aiohttp.ClientSession,
-                   params: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
-        """Collects indicator data"""
-        return await indicator_data(session, self.code, params)
+    # pylint: disable=invalid-name
+    async def df(self,
+                 session: aiohttp.ClientSession,
+                 params: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
+        """Collect indicator data"""
+        return await indicator_df(session, self.code, params)
 
-    async def dimensions(
-            self,
-            session: aiohttp.ClientSession) -> Mapping[str, pd.DataFrame]:
-        """Collects dimension data"""
-        return await dimension_data(session, self.code)
+    async def dims(self,
+                   session: aiohttp.ClientSession) -> Mapping[str, Dimension]:
+        """Collect indicator data"""
+        return await dimensions(session, self.code)
+
+    @staticmethod
+    def join(df: pd.DataFrame,
+             dims: Mapping[str, Dimension],
+             dropna: Optional[bool] = False) -> pd.DataFrame:
+        """Joins the data and dimensions into a single dataframe"""
+        for dim_name, dim_data in dims.items():
+            df = df.join(dim_data.df, on=dim_name, rsuffix=f'_{dim_name}')
+        # Set the index of the df to be the combination of dimensions
+        df = df.set_index(list(dims.keys()))
+        if not dropna:
+            return df
+        return df.dropna(axis=1, how='all')
 
 
 async def indicators(
@@ -153,7 +235,7 @@ async def indicators(
         params = None
 
 
-async def indicator_data(
+async def indicator_df(
         session: aiohttp.ClientSession,
         code: str,
         params: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
@@ -175,64 +257,8 @@ async def indicator_data(
     return _parse_data(await _fetch(session, url, params))
 
 
-class Dimension:
-    """Dimension class"""
-
-    _COLUMNS: Mapping[str, Mapping[str, _Path]] = {
-        'GEOGRAPHICAL': {
-            'latitude': _Path(float, 'latitude'),
-            'longitude': _Path(float, 'longitude'),
-        },
-        'TIME': dict(),
-        'MEASURE': {
-            'baseValue': _Path(str, 'quantity', 'baseValue'),
-            'decimalPlaces': _Path(int, 'quantity', 'decimalPlaces'),
-            'isPercentage': _Path(str, 'quantity', 'isPercentage'),
-            'max': _Path(float, 'quantity', 'max'),
-            'min': _Path(float, 'quantity', 'min'),
-            'percentageOf': _Path(MultiStr, 'quantity', 'percentageOf'),
-            'significantDigits': _Path(int, 'quantity', 'significantDigits'),
-            'type': _Path(str, 'quantity', 'type'),
-            'unit': _Path(MultiStr, 'quantity', 'unit'),
-            'unitMultiplier': _Path(MultiStr, 'quantity', 'unitMultiplier'),
-            'unitSymbol': _Path(str, 'quantity', 'unitSymbol'),
-            'unitSymbolPosition': _Path(str, 'quantity', 'unitSymbolPosition'),
-        },
-    }
-
-    @staticmethod
-    def _granularity(
-            data: Sequence[Mapping[str, Any]]) -> Mapping[str, MultiStr]:
-        """Formats granularity as a mapping of codes to titles"""
-        return dict(
-            (str(item['code']), MultiStr(item['title'])) for item in data)
-
-    def _columns(self) -> Mapping[str, Callable[[Any], Any]]:
-        """List of columns and corresponding paths within representation"""
-        if self.code not in Dimension._COLUMNS:
-            raise ValueError(f'Undefined dimension code {self.code}')
-        columns: Dict[str, _Path] = {
-            'code': _Path(str, 'code'),
-            'title': _Path(MultiStr, 'title'),
-        }
-        if self.granularity is not None and len(self.granularity) > 0:
-            columns['granularityCode'] = _Path(str, 'granularityCode')
-        columns.update(Dimension._COLUMNS[self.code])
-        return columns
-
-    def __init__(self, body: Mapping[str, Any]):
-        """Build dimension with body received from ISTAC"""
-        self.code = str(body['code'])
-        self.granularity = Dimension._granularity(
-            body.get('granularity', tuple()))
-        columns = self._columns()
-        data = (dict((col, path(rep)) for col, path in columns.items())
-                for rep in body.get('representation', tuple()))
-        self.df = pd.DataFrame(data, columns=columns).set_index('code')
-
-
-async def dimension_data(session: aiohttp.ClientSession,
-                         code: str) -> Mapping[str, Dimension]:
+async def dimensions(session: aiohttp.ClientSession,
+                     code: str) -> Mapping[str, Dimension]:
     """
     Build dataframe from ISTAC API dimension data. See:
     https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
