@@ -220,9 +220,9 @@ async def indicators(
 ) -> AsyncGenerator[Indicator, None]:
     """
     Enumerate indicators available from ISTAC API data. See:
-    https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
+    https://datos.canarias.es/api/estadisticas/indicators/v1.0/
     """
-    next_url = f'https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0/indicators'
+    next_url = f'https://datos.canarias.es/api/estadisticas/indicators/v1.0/indicators'
     while next_url != '':
         data = await _fetch(session, next_url, params)
         for item in data['items']:
@@ -241,7 +241,7 @@ async def indicator_df(
         params: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
     """
     Build dataframe from ISTAC API data. See:
-    https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
+    https://datos.canarias.es/api/estadisticas/indicators/v1.0/
 
     For example: request monthly data for 2019, absolute figures
     for indicator 'TURISTAS':
@@ -253,7 +253,7 @@ async def indicator_df(
             'fields': '-observationsMetadata',
         })
     """
-    url = f'https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0/indicators/{code}/data'
+    url = f'https://datos.canarias.es/api/estadisticas/indicators/v1.0/indicators/{code}/data'
     return _parse_data(await _fetch(session, url, params))
 
 
@@ -261,12 +261,12 @@ async def dimensions(session: aiohttp.ClientSession,
                      code: str) -> Mapping[str, Dimension]:
     """
     Build dataframe from ISTAC API dimension data. See:
-    https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0
+    https://datos.canarias.es/api/estadisticas/indicators/v1.0/
 
     For example: request dimensional data for indicator 'TURISTAS':
     data = await dimension_data(session, 'TURISTAS')
     """
-    url = f'https://www3.gobiernodecanarias.org/istac/api/indicators/v1.0/indicators/{code}'
+    url = f'https://datos.canarias.es/api/estadisticas/indicators/v1.0/indicators/{code}'
     body = await _fetch(session, url)
     return dict(
         (code, Dimension(data)) for code, data in body['dimension'].items())
