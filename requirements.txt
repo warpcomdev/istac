@@ -2,7 +2,7 @@ certifi==2022.6.15
 chardet==3.0.4
 charset-normalizer==2.1.0
 idna==2.8
-numpy==1.23.1
+numpy==1.22.0
 pandas==1.4.3
 pkg_resources==0.0.0
 psycopg2-binary==2.9.3
